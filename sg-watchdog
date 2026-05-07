@@ -1,0 +1,8 @@
+#!/bin/bash
+# ScreenGuard watchdog — alerts contact if ScreenGuard is not running
+CONTACT=$(defaults read com.screenguard.app sg_contact 2>/dev/null)
+[ -z "$CONTACT" ] && exit 0
+
+if ! pgrep -x ScreenGuard > /dev/null 2>&1; then
+    osascript -e "tell application \"Messages\" to send \"🛑 SCREENGUARD TAMPER: APP NOT RUNNING\" to buddy \"$CONTACT\" of (service 1 whose service type is iMessage)" 2>/dev/null
+fi
