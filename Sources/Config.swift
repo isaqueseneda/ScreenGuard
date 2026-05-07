@@ -42,4 +42,9 @@ final class Config {
         get { d.object(forKey: "sg_lastCheck") as? Date }
         set { d.set(newValue, forKey: "sg_lastCheck") }
     }
+
+    var onboardingComplete: Bool {
+        get { d.bool(forKey: "sg_onboarded") }
+        set { d.set(newValue, forKey: "sg_onboarded") }
+    }
 }

@@ -5,24 +5,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var timer: Timer?
     private var nextCheckDate: Date?
+    private var onboarding: OnboardingWindowController?
 
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusBar()
 
-        // Prompt for contact on first launch
-        if Config.shared.contact.isEmpty {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                self?.promptSetContact()
-            }
+        if Config.shared.onboardingComplete {
+            startMonitoring()
+        } else {
+            showOnboarding()
         }
+    }
 
+    private func showOnboarding() {
+        onboarding = OnboardingWindowController()
+        onboarding?.onComplete = { [weak self] in
+            self?.onboarding = nil
+            self?.rebuildMenu()
+            self?.startMonitoring()
+        }
+        onboarding?.show()
+    }
+
+    private func startMonitoring() {
         if Config.shared.enabled {
             scheduleNext()
         }
-
-        print("[ScreenGuard] Started — interval: \(Config.shared.intervalMinutes)m, model: \(Config.shared.model)")
+        print("[ScreenGuard] Active — interval: \(Config.shared.intervalMinutes)m, contact: \(Config.shared.contact), model: \(Config.shared.model)")
     }
 
     // MARK: - Status Bar
@@ -43,6 +54,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func rebuildMenu() {
         let menu = NSMenu()
         let config = Config.shared
+
+        // Show setup prompt if onboarding not done
+        if !config.onboardingComplete {
+            let setupItem = NSMenuItem(title: "⚠️ Complete Setup...", action: #selector(openSetup), keyEquivalent: "")
+            setupItem.target = self
+            menu.addItem(setupItem)
+            menu.addItem(.separator())
+        }
 
         // Toggle
         let toggleTitle = config.enabled ? "✅ Monitoring Active" : "⏸ Monitoring Paused"
@@ -117,6 +136,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Menu Actions
+
+    @objc private func openSetup() {
+        NSApp.setActivationPolicy(.regular)
+        showOnboarding()
+    }
 
     @objc private func toggleMonitoring() {
         Config.shared.enabled.toggle()
