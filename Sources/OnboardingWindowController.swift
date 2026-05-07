@@ -8,7 +8,7 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
     private var backButton: NSButton!
     private var nextButton: NSButton!
     private var currentStep = 0
-    private let totalSteps = 3
+    private let totalSteps = 4
 
     // Form fields (step 3)
     private var contactField: NSTextField!
@@ -133,9 +133,9 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
 
     @objc private func goNext() {
         switch currentStep {
-        case 0, 1:
+        case 0, 1, 2:
             showStep(currentStep + 1)
-        case 2:
+        case 3:
             finishSetup()
         default:
             break
@@ -151,7 +151,8 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
         switch step {
         case 0: buildWelcomeStep()
         case 1: buildPermissionsStep()
-        case 2: buildSetupStep()
+        case 2: buildHardeningStep()
+        case 3: buildSetupStep()
         default: break
         }
 
@@ -212,7 +213,151 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
         stepContent.addArrangedSubview(privacy)
     }
 
-    // MARK: - Step 2: Permissions
+    // MARK: - Step 2: Hardening
+
+    private func buildHardeningStep() {
+        let icon = centeredLabel("🛡️", size: 56)
+        stepContent.addArrangedSubview(icon)
+        stepContent.setCustomSpacing(12, after: icon)
+
+        let title = centeredLabel("Hardening", size: 28, weight: .bold)
+        stepContent.addArrangedSubview(title)
+        stepContent.setCustomSpacing(4, after: title)
+
+        let subtitle = centeredLabel("Close common loopholes", size: 14, weight: .medium, color: .secondaryLabelColor)
+        stepContent.addArrangedSubview(subtitle)
+        stepContent.setCustomSpacing(28, after: subtitle)
+
+        // ── Browser incognito ──
+        let browsers: [(id: String, name: String, icon: String, bundleId: String)] = [
+            ("chrome", "Chrome", "🌐", "com.google.Chrome"),
+            ("edge", "Edge", "🔵", "com.microsoft.Edge"),
+            ("brave", "Brave", "🦁", "com.brave.Browser"),
+        ]
+
+        for (i, browser) in browsers.enumerated() {
+            // Check if browser is installed
+            let path = NSWorkspace.shared.urlForApplication(withBundleIdentifier: browser.bundleId)
+            guard path != nil else { continue }
+
+            let isDisabled = checkIncognitoDisabled(bundleId: browser.bundleId)
+
+            let card = NSView()
+            card.wantsLayer = true
+            card.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+            card.layer?.cornerRadius = 10
+            card.layer?.borderWidth = 1
+            card.layer?.borderColor = NSColor.separatorColor.cgColor
+
+            let stack = NSStackView()
+            stack.orientation = .horizontal
+            stack.alignment = .centerY
+            stack.spacing = 12
+            stack.translatesAutoresizingMaskIntoConstraints = false
+            card.addSubview(stack)
+
+            NSLayoutConstraint.activate([
+                stack.topAnchor.constraint(equalTo: card.topAnchor, constant: 14),
+                stack.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 16),
+                stack.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -16),
+                stack.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -14),
+            ])
+
+            let emojiLabel = NSTextField(labelWithString: browser.icon)
+            emojiLabel.font = .systemFont(ofSize: 22)
+            emojiLabel.setContentHuggingPriority(.required, for: .horizontal)
+            stack.addArrangedSubview(emojiLabel)
+
+            let textStack = NSStackView()
+            textStack.orientation = .vertical
+            textStack.alignment = .leading
+            textStack.spacing = 2
+
+            let nameLabel = NSTextField(labelWithString: "Disable \(browser.name) Private Browsing")
+            nameLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+            textStack.addArrangedSubview(nameLabel)
+
+            let descLabel = NSTextField(labelWithString: isDisabled ? "Incognito mode is disabled" : "Incognito mode is currently available")
+            descLabel.font = .systemFont(ofSize: 11)
+            descLabel.textColor = .secondaryLabelColor
+            textStack.addArrangedSubview(descLabel)
+
+            stack.addArrangedSubview(textStack)
+
+            let spacer = NSView()
+            spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            stack.addArrangedSubview(spacer)
+
+            if isDisabled {
+                let badge = NSTextField(labelWithString: "✅")
+                badge.font = .systemFont(ofSize: 16)
+                badge.setContentHuggingPriority(.required, for: .horizontal)
+                stack.addArrangedSubview(badge)
+            } else {
+                let btn = NSButton(title: "Disable", target: self, action: #selector(disableIncognito(_:)))
+                btn.bezelStyle = .rounded
+                btn.controlSize = .regular
+                btn.tag = i
+                btn.setAccessibilityIdentifier(browser.bundleId)
+                stack.addArrangedSubview(btn)
+            }
+
+            stepContent.addArrangedSubview(card)
+            stepContent.setCustomSpacing(12, after: card)
+        }
+
+        stepContent.setCustomSpacing(24, after: stepContent.arrangedSubviews.last!)
+
+        // ── Screen Time suggestion ──
+        let sep = NSBox(); sep.boxType = .separator
+        stepContent.addArrangedSubview(sep)
+        stepContent.setCustomSpacing(20, after: sep)
+
+        let stIcon = centeredLabel("⏱", size: 32)
+        stepContent.addArrangedSubview(stIcon)
+        stepContent.setCustomSpacing(8, after: stIcon)
+
+        let stTitle = centeredLabel("Enable Apple Screen Time", size: 15, weight: .semibold)
+        stepContent.addArrangedSubview(stTitle)
+        stepContent.setCustomSpacing(6, after: stTitle)
+
+        let stDesc = NSTextField(wrappingLabelWithString:
+            "Use Screen Time → Content & Privacy to disable Safari Private Browsing " +
+            "and restrict adult websites system-wide. Have your accountability partner set the passcode."
+        )
+        stDesc.font = .systemFont(ofSize: 12)
+        stDesc.textColor = .secondaryLabelColor
+        stDesc.alignment = .center
+        stepContent.addArrangedSubview(stDesc)
+        stepContent.setCustomSpacing(12, after: stDesc)
+
+        let stButton = NSButton(title: "Open Screen Time Settings", target: self, action: #selector(openScreenTime))
+        stButton.bezelStyle = .rounded
+        stButton.controlSize = .regular
+        stepContent.addArrangedSubview(stButton)
+    }
+
+    private func checkIncognitoDisabled(bundleId: String) -> Bool {
+        let result = shellRun("defaults read \(bundleId) IncognitoModeAvailability 2>/dev/null")
+        let value = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value == "1"
+    }
+
+    @objc private func disableIncognito(_ sender: NSButton) {
+        let bundleId = sender.accessibilityIdentifier()
+        guard !bundleId.isEmpty else { return }
+        _ = shellRun("defaults write \(bundleId) IncognitoModeAvailability -integer 1")
+        // Refresh the step to show updated state
+        showStep(2)
+    }
+
+    @objc private func openScreenTime() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.Screen-Time-Settings") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    // MARK: - Step 3: Permissions
 
     private func buildPermissionsStep() {
         let icon = centeredLabel("🔐", size: 56)
@@ -553,6 +698,19 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
         label.textColor = color
         label.alignment = .center
         return label
+    }
+
+    private func shellRun(_ command: String) -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = ["-c", command]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try? process.run()
+        process.waitUntilExit()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        return String(data: data, encoding: .utf8) ?? ""
     }
 
     // MARK: - NSWindowDelegate
