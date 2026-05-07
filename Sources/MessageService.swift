@@ -5,16 +5,25 @@ final class MessageService {
     static let shared = MessageService()
 
     func sendAlert(to contact: String) {
+        send(message: "🚨 PORN DETECTED", to: contact)
+    }
+
+    func sendTamperAlert(to contact: String, action: String) {
+        send(message: "⚠️ SCREENGUARD: \(action)", to: contact)
+    }
+
+    private func send(message: String, to contact: String) {
         guard !contact.isEmpty else {
-            sgLog.warning("No contact configured — skipping alert")
+            sgLog.warning("No contact configured — skipping message")
             return
         }
 
         let escaped = contact.replacingOccurrences(of: "\"", with: "\\\"")
+        let escapedMsg = message.replacingOccurrences(of: "\"", with: "\\\"")
 
         let script = """
             tell application "Messages"
-                send "🚨 PORN DETECTED" to buddy "\(escaped)" of (service 1 whose service type is iMessage)
+                send "\(escapedMsg)" to buddy "\(escaped)" of (service 1 whose service type is iMessage)
             end tell
             """
 
@@ -27,7 +36,7 @@ final class MessageService {
             process.waitUntilExit()
 
             if process.terminationStatus == 0 {
-                sgLog.info("Alert sent to \(contact)")
+                sgLog.info("Message sent to \(contact)")
             } else {
                 sgLog.error("osascript exited with status \(process.terminationStatus)")
             }

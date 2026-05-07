@@ -43,7 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if let button = statusItem.button {
             button.image = NSImage(
-                systemSymbolName: "eye.trianglebadge.exclamationmark",
+                systemSymbolName: "eye",
                 accessibilityDescription: "ScreenGuard"
             )
         }
@@ -122,16 +122,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             timer?.invalidate()
             timer = nil
             sgLog.info("Monitoring paused")
+            MessageService.shared.sendTamperAlert(to: Config.shared.contact, action: "MONITORING PAUSED")
         }
         rebuildMenu()
     }
 
     @objc private func setInterval(_ sender: NSMenuItem) {
+        let old = Config.shared.intervalMinutes
         Config.shared.intervalMinutes = sender.tag
         timer?.invalidate()
         timer = nil
         if Config.shared.enabled { scheduleNext() }
         rebuildMenu()
+        if sender.tag != old {
+            MessageService.shared.sendTamperAlert(to: Config.shared.contact, action: "INTERVAL CHANGED: \(old)m → \(sender.tag)m")
+        }
     }
 
     @objc private func promptSetContact() {
@@ -157,7 +162,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func quit() {
-        NSApplication.shared.terminate(nil)
+        MessageService.shared.sendTamperAlert(to: Config.shared.contact, action: "APP CLOSED")
+        // Give iMessage time to send
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            NSApplication.shared.terminate(nil)
+        }
     }
 
     // MARK: - Scheduling
@@ -201,7 +210,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             jpeg = data
         } catch {
-            sgLog.error("Screen capture failed: \(error.localizedDescription)")
+            sgLog.error("Screen capture failed: \(error.localizedDescription, privacy: .public)")
             if !CGPreflightScreenCaptureAccess() {
                 CGRequestScreenCaptureAccess()
             }
