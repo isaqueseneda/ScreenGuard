@@ -254,24 +254,40 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
         stepContent.addArrangedSubview(msgCard)
         stepContent.setCustomSpacing(24, after: msgCard)
 
-        // Refresh button
-        let refreshRow = NSStackView()
-        refreshRow.orientation = .horizontal
-        refreshRow.alignment = .centerY
+        // Restart notice
+        let notice = NSTextField(wrappingLabelWithString:
+            "⚡ After granting Screen Recording, press Restart below — macOS requires a restart for the permission to take effect."
+        )
+        notice.font = .systemFont(ofSize: 12, weight: .medium)
+        notice.textColor = .systemOrange
+        notice.alignment = .center
+        stepContent.addArrangedSubview(notice)
+        stepContent.setCustomSpacing(16, after: notice)
+
+        // Button row
+        let buttonRow = NSStackView()
+        buttonRow.orientation = .horizontal
+        buttonRow.alignment = .centerY
+        buttonRow.spacing = 12
 
         let refreshButton = NSButton(title: "↻  Check Again", target: self, action: #selector(refreshPermissions))
         refreshButton.bezelStyle = .rounded
         refreshButton.controlSize = .regular
-        refreshRow.addArrangedSubview(refreshButton)
+        buttonRow.addArrangedSubview(refreshButton)
+
+        let restartButton = NSButton(title: "⟳  Restart ScreenGuard", target: self, action: #selector(restartApp))
+        restartButton.bezelStyle = .rounded
+        restartButton.controlSize = .regular
+        buttonRow.addArrangedSubview(restartButton)
 
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        refreshRow.addArrangedSubview(spacer)
+        buttonRow.addArrangedSubview(spacer)
 
-        stepContent.addArrangedSubview(refreshRow)
-        stepContent.setCustomSpacing(16, after: refreshRow)
+        stepContent.addArrangedSubview(buttonRow)
+        stepContent.setCustomSpacing(16, after: buttonRow)
 
-        let hint = centeredLabel("You can always grant these later in\nSystem Settings → Privacy & Security", size: 11, color: .tertiaryLabelColor)
+        let hint = centeredLabel("You can also grant these later in\nSystem Settings → Privacy & Security", size: 11, color: .tertiaryLabelColor)
         stepContent.addArrangedSubview(hint)
     }
 
@@ -353,13 +369,24 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
     }
 
     @objc private func grantScreenRecording() {
+        // Opens System Settings → Privacy → Screen Recording
         CGRequestScreenCaptureAccess()
+        // Also try the direct URL in case CGRequest doesn't open Settings
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     @objc private func grantMessages() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
             NSWorkspace.shared.open(url)
         }
+    }
+
+    @objc private func restartApp() {
+        // LaunchAgent (KeepAlive=true) will restart us automatically
+        sgLog.info("Restarting for permission changes...")
+        NSApp.terminate(nil)
     }
 
     @objc private func refreshPermissions() {

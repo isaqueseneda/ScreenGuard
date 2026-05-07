@@ -6,7 +6,7 @@ final class MessageService {
 
     func sendAlert(to contact: String) {
         guard !contact.isEmpty else {
-            print("[ScreenGuard] No contact configured — skipping alert")
+            sgLog.warning("No contact configured — skipping alert")
             return
         }
 
@@ -27,12 +27,12 @@ final class MessageService {
             process.waitUntilExit()
 
             if process.terminationStatus == 0 {
-                print("[ScreenGuard] ✉️ Alert sent to \(contact)")
+                sgLog.info("Alert sent to \(contact)")
             } else {
-                print("[ScreenGuard] osascript exited with status \(process.terminationStatus)")
+                sgLog.error("osascript exited with status \(process.terminationStatus)")
             }
         } catch {
-            print("[ScreenGuard] Failed to send iMessage: \(error.localizedDescription)")
+            sgLog.error("Failed to send iMessage: \(error.localizedDescription)")
         }
     }
 }

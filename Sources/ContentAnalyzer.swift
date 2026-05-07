@@ -9,7 +9,7 @@ final class ContentAnalyzer {
         let base64 = imageData.base64EncodedString()
 
         guard let url = URL(string: "http://localhost:\(config.ollamaPort)/api/generate") else {
-            print("[ScreenGuard] Invalid Ollama URL")
+            sgLog.error("Invalid Ollama URL")
             return false
         }
 
@@ -36,11 +36,11 @@ final class ContentAnalyzer {
             if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                let response = json["response"] as? String {
                 let trimmed = response.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-                print("[ScreenGuard] Ollama response: \(trimmed)")
+                sgLog.info("Ollama response: \(trimmed)")
                 return trimmed.hasPrefix("YES")
             }
         } catch {
-            print("[ScreenGuard] Ollama error: \(error.localizedDescription)")
+            sgLog.error("Ollama error: \(error.localizedDescription)")
         }
 
         return false

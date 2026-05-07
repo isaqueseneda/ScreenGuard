@@ -1,10 +1,10 @@
 import AppKit
 import CoreGraphics
+import ScreenCaptureKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var timer: Timer?
-    private var nextCheckDate: Date?
     private var onboarding: OnboardingWindowController?
 
     // MARK: - Lifecycle
@@ -33,7 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if Config.shared.enabled {
             scheduleNext()
         }
-        print("[ScreenGuard] Active — interval: \(Config.shared.intervalMinutes)m, contact: \(Config.shared.contact), model: \(Config.shared.model)")
+        sgLog.info("Active — interval: \(Config.shared.intervalMinutes)m, contact: \(Config.shared.contact), model: \(Config.shared.model)")
     }
 
     // MARK: - Status Bar
@@ -55,7 +55,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         let config = Config.shared
 
-        // Show setup prompt if onboarding not done
         if !config.onboardingComplete {
             let setupItem = NSMenuItem(title: "⚠️ Complete Setup...", action: #selector(openSetup), keyEquivalent: "")
             setupItem.target = self
@@ -63,7 +62,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(.separator())
         }
 
-        // Toggle
         let toggleTitle = config.enabled ? "✅ Monitoring Active" : "⏸ Monitoring Paused"
         let toggle = NSMenuItem(title: toggleTitle, action: #selector(toggleMonitoring), keyEquivalent: "")
         toggle.target = self
@@ -71,7 +69,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        // Interval submenu
         let intervalItem = NSMenuItem(title: "Interval: \(config.intervalMinutes) min", action: nil, keyEquivalent: "")
         let intervalMenu = NSMenu()
         for mins in [1, 5, 10, 15, 30, 60] {
@@ -84,46 +81,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         intervalItem.submenu = intervalMenu
         menu.addItem(intervalItem)
 
-        // Contact
         let contactDisplay = config.contact.isEmpty ? "Not set ⚠️" : config.contact
         let contactItem = NSMenuItem(title: "Contact: \(contactDisplay)", action: #selector(promptSetContact), keyEquivalent: "")
         contactItem.target = self
         menu.addItem(contactItem)
 
-        // Model
         let modelItem = NSMenuItem(title: "Model: \(config.model)", action: #selector(promptSetModel), keyEquivalent: "")
         modelItem.target = self
         menu.addItem(modelItem)
 
-        menu.addItem(.separator())
-
-        // Status info
-        let lastText = formatLastCheck()
-        let lastItem = NSMenuItem(title: lastText, action: nil, keyEquivalent: "")
-        lastItem.isEnabled = false
-        menu.addItem(lastItem)
-
-        let detItem = NSMenuItem(title: "Detections: \(config.detections)", action: nil, keyEquivalent: "")
-        detItem.isEnabled = false
-        menu.addItem(detItem)
-
-        let nextText = formatNextCheck()
-        let nextItem = NSMenuItem(title: nextText, action: nil, keyEquivalent: "")
-        nextItem.isEnabled = false
-        menu.addItem(nextItem)
-
-        menu.addItem(.separator())
-
-        // Manual trigger
-        let captureItem = NSMenuItem(title: "📸 Capture Now", action: #selector(captureNow), keyEquivalent: "t")
-        captureItem.target = self
-        menu.addItem(captureItem)
-
-        // Reset detections
         if config.detections > 0 {
-            let resetItem = NSMenuItem(title: "Reset Detection Count", action: #selector(resetDetections), keyEquivalent: "")
-            resetItem.target = self
-            menu.addItem(resetItem)
+            menu.addItem(.separator())
+            let detItem = NSMenuItem(title: "⚠️ Detections: \(config.detections)", action: nil, keyEquivalent: "")
+            detItem.isEnabled = false
+            menu.addItem(detItem)
         }
 
         menu.addItem(.separator())
@@ -146,12 +117,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Config.shared.enabled.toggle()
         if Config.shared.enabled {
             scheduleNext()
-            print("[ScreenGuard] Monitoring resumed")
+            sgLog.info("Monitoring resumed")
         } else {
             timer?.invalidate()
             timer = nil
-            nextCheckDate = nil
-            print("[ScreenGuard] Monitoring paused")
+            sgLog.info("Monitoring paused")
         }
         rebuildMenu()
     }
@@ -162,7 +132,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         timer = nil
         if Config.shared.enabled { scheduleNext() }
         rebuildMenu()
-        print("[ScreenGuard] Interval → \(sender.tag)m")
     }
 
     @objc private func promptSetContact() {
@@ -173,7 +142,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) {
             Config.shared.contact = value
             rebuildMenu()
-            print("[ScreenGuard] Contact → \(value)")
         }
     }
 
@@ -185,17 +153,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) {
             Config.shared.model = value
             rebuildMenu()
-            print("[ScreenGuard] Model → \(value)")
         }
-    }
-
-    @objc private func captureNow() {
-        Task { await captureAndAnalyze() }
-    }
-
-    @objc private func resetDetections() {
-        Config.shared.detections = 0
-        rebuildMenu()
     }
 
     @objc private func quit() {
@@ -208,7 +166,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         timer?.invalidate()
         let intervalSec = Double(Config.shared.intervalMinutes * 60)
         let delay = Double.random(in: 10...max(11, intervalSec))
-        nextCheckDate = Date().addingTimeInterval(delay)
 
         timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
             Task { @MainActor [weak self] in
@@ -218,49 +175,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
-
-        print("[ScreenGuard] Next capture in \(Int(delay))s")
     }
 
     // MARK: - Capture & Analyze
 
     private func captureAndAnalyze() async {
-        // Check screen capture permission
-        if !CGPreflightScreenCaptureAccess() {
-            CGRequestScreenCaptureAccess()
-            print("[ScreenGuard] ⚠️ Screen Recording permission required — check System Settings > Privacy")
-            return
-        }
+        let jpeg: Data
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            guard let display = content.displays.first else {
+                sgLog.error("No display found")
+                return
+            }
 
-        // Take screenshot
-        guard let cgImage = CGWindowListCreateImage(
-            .infinite, .optionOnScreenOnly, kCGNullWindowID, [.bestResolution]
-        ) else {
-            print("[ScreenGuard] Failed to capture screenshot")
-            return
-        }
+            let filter = SCContentFilter(display: display, excludingWindows: [])
+            let config = SCStreamConfiguration()
+            config.width = display.width * 2
+            config.height = display.height * 2
 
-        // Convert to JPEG
-        let bitmap = NSBitmapImageRep(cgImage: cgImage)
-        guard let jpeg = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.5]) else {
-            print("[ScreenGuard] Failed to encode JPEG")
+            let cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+            let bitmap = NSBitmapImageRep(cgImage: cgImage)
+            guard let data = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.5]) else {
+                sgLog.error("Failed to encode JPEG")
+                return
+            }
+            jpeg = data
+        } catch {
+            sgLog.error("Screen capture failed: \(error.localizedDescription)")
+            if !CGPreflightScreenCaptureAccess() {
+                CGRequestScreenCaptureAccess()
+            }
             return
         }
 
         Config.shared.lastCheck = Date()
-        print("[ScreenGuard] 📸 Captured (\(jpeg.count / 1024) KB) — analyzing...")
-        rebuildMenu()
+        sgLog.info("Captured \(jpeg.count / 1024) KB — analyzing...")
 
-        // Send to Ollama
         let isNSFW = await ContentAnalyzer.shared.analyze(imageData: jpeg)
 
         if isNSFW {
             Config.shared.detections += 1
-            print("[ScreenGuard] 🚨 NSFW CONTENT DETECTED!")
+            sgLog.error("NSFW CONTENT DETECTED!")
             MessageService.shared.sendAlert(to: Config.shared.contact)
             flashIcon()
         } else {
-            print("[ScreenGuard] ✓ Clean")
+            sgLog.info("Clean")
         }
 
         rebuildMenu()
@@ -278,20 +237,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
             button.image = original
         }
-    }
-
-    private func formatLastCheck() -> String {
-        guard let last = Config.shared.lastCheck else { return "Last check: never" }
-        let ago = Int(Date().timeIntervalSince(last))
-        if ago < 60 { return "Last check: \(ago)s ago" }
-        return "Last check: \(ago / 60)m ago"
-    }
-
-    private func formatNextCheck() -> String {
-        guard let next = nextCheckDate, Config.shared.enabled else { return "Next check: —" }
-        let secs = Int(next.timeIntervalSinceNow)
-        guard secs > 0 else { return "Next check: imminent" }
-        return "Next check: ~\(secs / 60)m \(secs % 60)s"
     }
 
     private func showInputDialog(title: String, message: String, defaultValue: String) -> String? {
