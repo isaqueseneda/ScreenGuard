@@ -1,48 +1,96 @@
-import Foundation
+import CoreML
+import Vision
+import AppKit
 
-/// Sends screenshot to Ollama vision model for NSFW analysis
+/// Uses Yahoo's Open NSFW CoreML model for instant NSFW detection
 final class ContentAnalyzer {
     static let shared = ContentAnalyzer()
 
-    func analyze(imageData: Data) async -> Bool {
-        let config = Config.shared
-        let base64 = imageData.base64EncodedString()
+    private var visionModel: VNCoreMLModel?
+    private let threshold: Float = 0.25
 
-        guard let url = URL(string: "http://localhost:\(config.ollamaPort)/api/generate") else {
-            sgLog.error("Invalid Ollama URL")
+    init() {
+        loadModel()
+    }
+
+    private func loadModel() {
+        guard let url = findModelURL() else {
+            sgLog.error("OpenNSFW.mlmodelc not found in any search path")
+            return
+        }
+
+        do {
+            let mlModel = try MLModel(contentsOf: url)
+            visionModel = try VNCoreMLModel(for: mlModel)
+            sgLog.info("NSFW model loaded from \(url.path, privacy: .public)")
+        } catch {
+            sgLog.error("Failed to load NSFW model: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func findModelURL() -> URL? {
+        // 1. App bundle Contents/Resources/
+        if let url = Bundle.main.url(forResource: "OpenNSFW", withExtension: "mlmodelc") {
+            return url
+        }
+
+        // 2. Next to the executable (SwiftPM build output)
+        if let execDir = Bundle.main.executableURL?.deletingLastPathComponent() {
+            let candidate = execDir.appendingPathComponent("ScreenGuard_ScreenGuard.bundle/OpenNSFW.mlmodelc")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+        }
+
+        // 3. Source tree (development)
+        let srcPath = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Resources/OpenNSFW.mlmodelc")
+        if FileManager.default.fileExists(atPath: srcPath.path) {
+            return srcPath
+        }
+
+        return nil
+    }
+
+    func analyze(cgImage: CGImage) -> Bool {
+        guard let model = visionModel else {
+            sgLog.error("NSFW model not available")
             return false
         }
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 120
+        var isNSFW = false
+        let semaphore = DispatchSemaphore(value: 0)
 
-        let body: [String: Any] = [
-            "model": config.model,
-            "prompt": """
-                Analyze this screenshot. Does it contain pornographic content, nudity, \
-                or sexually explicit material (naked bodies, sex acts, genitalia, erotic content)? \
-                Answer with ONLY the word YES or NO. Nothing else.
-                """,
-            "images": [base64],
-            "stream": false
-        ]
+        let request = VNCoreMLRequest(model: model) { request, error in
+            defer { semaphore.signal() }
 
-        do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            let (data, _) = try await URLSession.shared.data(for: request)
-
-            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let response = json["response"] as? String {
-                let trimmed = response.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-                sgLog.info("Ollama response: \(trimmed)")
-                return trimmed.hasPrefix("YES")
+            if let error = error {
+                sgLog.error("Vision request error: \(error.localizedDescription, privacy: .public)")
+                return
             }
-        } catch {
-            sgLog.error("Ollama error: \(error.localizedDescription)")
+
+            guard let results = request.results as? [VNClassificationObservation] else { return }
+
+            for result in results {
+                sgLog.notice("\(result.identifier, privacy: .public): \(String(format: "%.1f%%", result.confidence * 100), privacy: .public)")
+            }
+
+            if let nsfwResult = results.first(where: { $0.identifier == "NSFW" }) {
+                isNSFW = nsfwResult.confidence > self.threshold
+            }
         }
 
-        return false
+        request.imageCropAndScaleOption = .scaleFill
+
+        let handler = VNImageRequestHandler(cgImage: cgImage)
+        do {
+            try handler.perform([request])
+            semaphore.wait()
+        } catch {
+            sgLog.error("Image analysis failed: \(error.localizedDescription, privacy: .public)")
+        }
+
+        return isNSFW
     }
 }

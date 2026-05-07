@@ -86,10 +86,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         contactItem.target = self
         menu.addItem(contactItem)
 
-        let modelItem = NSMenuItem(title: "Model: \(config.model)", action: #selector(promptSetModel), keyEquivalent: "")
-        modelItem.target = self
-        menu.addItem(modelItem)
-
         if config.detections > 0 {
             menu.addItem(.separator())
             let detItem = NSMenuItem(title: "⚠️ Detections: \(config.detections)", action: nil, keyEquivalent: "")
@@ -150,17 +146,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func promptSetModel() {
-        if let value = showInputDialog(
-            title: "Set Vision Model",
-            message: "Ollama vision model name (e.g. llava, minicpm-v, gemma3):",
-            defaultValue: Config.shared.model
-        ) {
-            Config.shared.model = value
-            rebuildMenu()
-        }
-    }
-
     @objc private func quit() {
         MessageService.shared.sendTamperAlert(to: Config.shared.contact, action: "APP CLOSED")
         // Give iMessage time to send
@@ -189,7 +174,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Capture & Analyze
 
     private func captureAndAnalyze() async {
-        let jpeg: Data
+        let cgImage: CGImage
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
             guard let display = content.displays.first else {
@@ -199,16 +184,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             let filter = SCContentFilter(display: display, excludingWindows: [])
             let config = SCStreamConfiguration()
-            config.width = display.width * 2
-            config.height = display.height * 2
+            config.width = display.width
+            config.height = display.height
 
-            let cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-            let bitmap = NSBitmapImageRep(cgImage: cgImage)
-            guard let data = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.5]) else {
-                sgLog.error("Failed to encode JPEG")
-                return
-            }
-            jpeg = data
+            cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
         } catch {
             sgLog.error("Screen capture failed: \(error.localizedDescription, privacy: .public)")
             if !CGPreflightScreenCaptureAccess() {
@@ -218,9 +197,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         Config.shared.lastCheck = Date()
-        sgLog.info("Captured \(jpeg.count / 1024) KB — analyzing...")
 
-        let isNSFW = await ContentAnalyzer.shared.analyze(imageData: jpeg)
+        // CoreML NSFW detection — runs in milliseconds
+        let isNSFW = ContentAnalyzer.shared.analyze(cgImage: cgImage)
 
         if isNSFW {
             Config.shared.detections += 1

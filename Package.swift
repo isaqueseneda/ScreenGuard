@@ -7,7 +7,8 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "ScreenGuard",
-            path: "Sources"
+            path: "Sources",
+            exclude: ["Resources"]
         )
     ]
 )
