@@ -9,6 +9,8 @@ final class ContentAnalyzer {
     private var visionModel: VNCoreMLModel?
     private let threshold: Float = 0.25
 
+    var isModelLoaded: Bool { visionModel != nil }
+
     init() {
         loadModel()
     }

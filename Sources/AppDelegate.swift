@@ -190,6 +190,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
         } catch {
             sgLog.error("Screen capture failed: \(error.localizedDescription, privacy: .public)")
+            // Alert contact that screen recording was revoked
+            MessageService.shared.sendTamperAlert(to: Config.shared.contact, action: "SCREEN RECORDING REVOKED — cannot capture screenshots")
             if !CGPreflightScreenCaptureAccess() {
                 CGRequestScreenCaptureAccess()
             }
@@ -199,6 +201,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Config.shared.lastCheck = Date()
 
         // CoreML NSFW detection — runs in milliseconds
+        guard ContentAnalyzer.shared.isModelLoaded else {
+            sgLog.error("NSFW model not available")
+            MessageService.shared.sendTamperAlert(to: Config.shared.contact, action: "NSFW MODEL MISSING — detection disabled")
+            return
+        }
         let isNSFW = ContentAnalyzer.shared.analyze(cgImage: cgImage)
 
         if isNSFW {

@@ -5,11 +5,11 @@ final class MessageService {
     static let shared = MessageService()
 
     func sendAlert(to contact: String) {
-        send(message: "🚨 PORN DETECTED", to: contact)
+        send(message: "🚨 PORN DETECTED on screen right now", to: contact)
     }
 
     func sendTamperAlert(to contact: String, action: String) {
-        send(message: "⚠️ SCREENGUARD: \(action)", to: contact)
+        send(message: "🛑 SCREENGUARD TAMPER: \(action)", to: contact)
     }
 
     private func send(message: String, to contact: String) {
