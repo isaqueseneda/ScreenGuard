@@ -174,49 +174,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Capture & Analyze
 
     private func captureAndAnalyze() async {
-        let cgImage: CGImage
-        do {
-            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-            guard let display = content.displays.first else {
-                sgLog.error("No display found")
-                return
+        // Screen capture + ML analysis — run off the main actor so
+        // ScreenCaptureKit's window-server IPC does not disrupt focus
+        // on the main thread (causes text-field deselection system-wide).
+        let isNSFW: Bool? = await Task.detached { () -> Bool? in
+            let cgImage: CGImage
+            do {
+                let content = try await SCShareableContent.excludingDesktopWindows(
+                    false, onScreenWindowsOnly: true)
+                guard let display = content.displays.first else {
+                    sgLog.error("No display found")
+                    return nil
+                }
+
+                let filter = SCContentFilter(display: display, excludingWindows: [])
+                let config = SCStreamConfiguration()
+                config.width = display.width
+                config.height = display.height
+
+                cgImage = try await SCScreenshotManager.captureImage(
+                    contentFilter: filter, configuration: config)
+            } catch {
+                sgLog.error("Screen capture failed: \(error.localizedDescription, privacy: .public)")
+                let contact = Config.shared.contact
+                MessageService.shared.sendTamperAlert(
+                    to: contact,
+                    action: "SCREEN RECORDING REVOKED — cannot capture screenshots")
+                return nil
             }
 
-            let filter = SCContentFilter(display: display, excludingWindows: [])
-            let config = SCStreamConfiguration()
-            config.width = display.width
-            config.height = display.height
-
-            cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-        } catch {
-            sgLog.error("Screen capture failed: \(error.localizedDescription, privacy: .public)")
-            // Send tamper alert off main thread (osascript blocks until done)
-            let contact = Config.shared.contact
-            Task.detached {
-                MessageService.shared.sendTamperAlert(to: contact, action: "SCREEN RECORDING REVOKED — cannot capture screenshots")
+            // CoreML NSFW detection
+            guard ContentAnalyzer.shared.isModelLoaded else {
+                sgLog.error("NSFW model not available")
+                let contact = Config.shared.contact
+                MessageService.shared.sendTamperAlert(
+                    to: contact,
+                    action: "NSFW MODEL MISSING — detection disabled")
+                return nil
             }
-            // NOTE: Do NOT call CGRequestScreenCaptureAccess() here — it opens
-            // System Settings and steals focus from the user's active app on
-            // every capture cycle, causing text fields to deselect system-wide.
-            return
-        }
+
+            return ContentAnalyzer.shared.analyze(cgImage: cgImage)
+        }.value
+
+        guard let isNSFW else { return }
 
         Config.shared.lastCheck = Date()
-
-        // CoreML NSFW detection
-        guard ContentAnalyzer.shared.isModelLoaded else {
-            sgLog.error("NSFW model not available")
-            let contact = Config.shared.contact
-            Task.detached {
-                MessageService.shared.sendTamperAlert(to: contact, action: "NSFW MODEL MISSING — detection disabled")
-            }
-            return
-        }
-
-        // Run ML inference off the main thread to avoid blocking the RunLoop
-        let isNSFW = await Task.detached {
-            ContentAnalyzer.shared.analyze(cgImage: cgImage)
-        }.value
 
         if isNSFW {
             Config.shared.detections += 1
