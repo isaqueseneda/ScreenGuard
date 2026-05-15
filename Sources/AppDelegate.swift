@@ -190,34 +190,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
         } catch {
             sgLog.error("Screen capture failed: \(error.localizedDescription, privacy: .public)")
-            // Alert contact that screen recording was revoked
-            MessageService.shared.sendTamperAlert(to: Config.shared.contact, action: "SCREEN RECORDING REVOKED — cannot capture screenshots")
-            if !CGPreflightScreenCaptureAccess() {
-                CGRequestScreenCaptureAccess()
+            // Send tamper alert off main thread (osascript blocks until done)
+            let contact = Config.shared.contact
+            Task.detached {
+                MessageService.shared.sendTamperAlert(to: contact, action: "SCREEN RECORDING REVOKED — cannot capture screenshots")
             }
+            // NOTE: Do NOT call CGRequestScreenCaptureAccess() here — it opens
+            // System Settings and steals focus from the user's active app on
+            // every capture cycle, causing text fields to deselect system-wide.
             return
         }
 
         Config.shared.lastCheck = Date()
 
-        // CoreML NSFW detection — runs in milliseconds
+        // CoreML NSFW detection
         guard ContentAnalyzer.shared.isModelLoaded else {
             sgLog.error("NSFW model not available")
-            MessageService.shared.sendTamperAlert(to: Config.shared.contact, action: "NSFW MODEL MISSING — detection disabled")
+            let contact = Config.shared.contact
+            Task.detached {
+                MessageService.shared.sendTamperAlert(to: contact, action: "NSFW MODEL MISSING — detection disabled")
+            }
             return
         }
-        let isNSFW = ContentAnalyzer.shared.analyze(cgImage: cgImage)
+
+        // Run ML inference off the main thread to avoid blocking the RunLoop
+        let isNSFW = await Task.detached {
+            ContentAnalyzer.shared.analyze(cgImage: cgImage)
+        }.value
 
         if isNSFW {
             Config.shared.detections += 1
             sgLog.error("NSFW CONTENT DETECTED!")
-            MessageService.shared.sendAlert(to: Config.shared.contact)
+            let contact = Config.shared.contact
+            Task.detached {
+                MessageService.shared.sendAlert(to: contact)
+            }
             flashIcon()
+            rebuildMenu()
         } else {
             sgLog.info("Clean")
         }
-
-        rebuildMenu()
     }
 
     // MARK: - Helpers
