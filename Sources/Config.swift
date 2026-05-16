@@ -47,4 +47,14 @@ final class Config {
         get { d.bool(forKey: "sg_onboarded") }
         set { d.set(newValue, forKey: "sg_onboarded") }
     }
+
+    var didAlertRecordingRevoked: Bool {
+        get { d.bool(forKey: "sg_alertedRecordingRevoked") }
+        set { d.set(newValue, forKey: "sg_alertedRecordingRevoked") }
+    }
+
+    var didAlertModelMissing: Bool {
+        get { d.bool(forKey: "sg_alertedModelMissing") }
+        set { d.set(newValue, forKey: "sg_alertedModelMissing") }
+    }
 }

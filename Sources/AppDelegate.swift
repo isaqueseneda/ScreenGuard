@@ -6,8 +6,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var timer: Timer?
     private var onboarding: OnboardingWindowController?
-    private var didAlertRecordingRevoked = false
-    private var didAlertModelMissing = false
 
     // MARK: - Lifecycle
 
@@ -219,16 +217,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         switch result {
         case .captureFailed:
-            if !didAlertRecordingRevoked {
-                didAlertRecordingRevoked = true
+            if !Config.shared.didAlertRecordingRevoked {
+                Config.shared.didAlertRecordingRevoked = true
                 MessageService.shared.sendTamperAlert(
                     to: Config.shared.contact,
                     action: "SCREEN RECORDING REVOKED — cannot capture screenshots")
             }
             return
         case .modelMissing:
-            if !didAlertModelMissing {
-                didAlertModelMissing = true
+            if !Config.shared.didAlertModelMissing {
+                Config.shared.didAlertModelMissing = true
                 MessageService.shared.sendTamperAlert(
                     to: Config.shared.contact,
                     action: "NSFW MODEL MISSING — detection disabled")
@@ -238,6 +236,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         case .analyzed(let isNSFW):
             Config.shared.lastCheck = Date()
+            // Permission restored — re-arm alerts for future revocations
+            Config.shared.didAlertRecordingRevoked = false
+            Config.shared.didAlertModelMissing = false
             guard isNSFW else {
                 sgLog.info("Clean")
                 return
