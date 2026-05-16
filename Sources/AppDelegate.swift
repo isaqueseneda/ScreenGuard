@@ -237,9 +237,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .noDisplay:
             return
         case .analyzed(let isNSFW):
-            // Capture succeeded — reset revocation flag so we alert again
-            // if permission is revoked in the future.
-            didAlertRecordingRevoked = false
             Config.shared.lastCheck = Date()
             guard isNSFW else {
                 sgLog.info("Clean")
