@@ -6,6 +6,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var timer: Timer?
     private var onboarding: OnboardingWindowController?
+    private var didAlertRecordingRevoked = false
+    private var didAlertModelMissing = false
 
     // MARK: - Lifecycle
 
@@ -173,18 +175,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Capture & Analyze
 
+    private enum CaptureResult {
+        case analyzed(Bool)
+        case captureFailed
+        case modelMissing
+        case noDisplay
+    }
+
     private func captureAndAnalyze() async {
         // Screen capture + ML analysis — run off the main actor so
         // ScreenCaptureKit's window-server IPC does not disrupt focus
         // on the main thread (causes text-field deselection system-wide).
-        let isNSFW: Bool? = await Task.detached { () -> Bool? in
+        let result: CaptureResult = await Task.detached { () -> CaptureResult in
             let cgImage: CGImage
             do {
                 let content = try await SCShareableContent.excludingDesktopWindows(
                     false, onScreenWindowsOnly: true)
                 guard let display = content.displays.first else {
                     sgLog.error("No display found")
-                    return nil
+                    return .noDisplay
                 }
 
                 let filter = SCContentFilter(display: display, excludingWindows: [])
@@ -196,42 +205,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     contentFilter: filter, configuration: config)
             } catch {
                 sgLog.error("Screen capture failed: \(error.localizedDescription, privacy: .public)")
-                let contact = Config.shared.contact
-                MessageService.shared.sendTamperAlert(
-                    to: contact,
-                    action: "SCREEN RECORDING REVOKED — cannot capture screenshots")
-                return nil
+                return .captureFailed
             }
 
             // CoreML NSFW detection
             guard ContentAnalyzer.shared.isModelLoaded else {
                 sgLog.error("NSFW model not available")
-                let contact = Config.shared.contact
-                MessageService.shared.sendTamperAlert(
-                    to: contact,
-                    action: "NSFW MODEL MISSING — detection disabled")
-                return nil
+                return .modelMissing
             }
 
-            return ContentAnalyzer.shared.analyze(cgImage: cgImage)
+            return .analyzed(ContentAnalyzer.shared.analyze(cgImage: cgImage))
         }.value
 
-        guard let isNSFW else { return }
-
-        Config.shared.lastCheck = Date()
-
-        if isNSFW {
-            Config.shared.detections += 1
-            sgLog.error("NSFW CONTENT DETECTED!")
-            let contact = Config.shared.contact
-            Task.detached {
-                MessageService.shared.sendAlert(to: contact)
+        switch result {
+        case .captureFailed:
+            if !didAlertRecordingRevoked {
+                didAlertRecordingRevoked = true
+                MessageService.shared.sendTamperAlert(
+                    to: Config.shared.contact,
+                    action: "SCREEN RECORDING REVOKED — cannot capture screenshots")
             }
-            flashIcon()
-            rebuildMenu()
-        } else {
-            sgLog.info("Clean")
+            return
+        case .modelMissing:
+            if !didAlertModelMissing {
+                didAlertModelMissing = true
+                MessageService.shared.sendTamperAlert(
+                    to: Config.shared.contact,
+                    action: "NSFW MODEL MISSING — detection disabled")
+            }
+            return
+        case .noDisplay:
+            return
+        case .analyzed(let isNSFW):
+            // Capture succeeded — reset revocation flag so we alert again
+            // if permission is revoked in the future.
+            didAlertRecordingRevoked = false
+            Config.shared.lastCheck = Date()
+            guard isNSFW else {
+                sgLog.info("Clean")
+                return
+            }
         }
+
+        // NSFW detected
+        Config.shared.detections += 1
+        sgLog.error("NSFW CONTENT DETECTED!")
+        let contact = Config.shared.contact
+        Task.detached {
+            MessageService.shared.sendAlert(to: contact)
+        }
+        flashIcon()
+        rebuildMenu()
     }
 
     // MARK: - Helpers
