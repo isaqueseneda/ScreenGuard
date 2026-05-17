@@ -7,9 +7,10 @@ final class ContentAnalyzer {
     static let shared = ContentAnalyzer()
 
     private var visionModel: VNCoreMLModel?
-    private let threshold: Float = 0.25
+    private let threshold: Float = 0.10
 
     var isModelLoaded: Bool { visionModel != nil }
+    private(set) var lastNSFWScore: Float = 0
 
     init() {
         loadModel()
@@ -79,6 +80,7 @@ final class ContentAnalyzer {
             }
 
             if let nsfwResult = results.first(where: { $0.identifier == "NSFW" }) {
+                self.lastNSFWScore = nsfwResult.confidence
                 isNSFW = nsfwResult.confidence > self.threshold
             }
         }

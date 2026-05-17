@@ -1,11 +1,17 @@
 import AppKit
 import CoreGraphics
-import ScreenCaptureKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var timer: Timer?
     private var onboarding: OnboardingWindowController?
+    private var testModeActive = false
+    private var testTimer: Timer?
+    private let screenshotDir: URL = {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ScreenGuard_Screenshots")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
 
     // MARK: - Lifecycle
 
@@ -38,6 +44,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Status Bar
 
+    private var menu: NSMenu?
+
     private func setupStatusBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
@@ -46,28 +54,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 systemSymbolName: "eye",
                 accessibilityDescription: "ScreenGuard"
             )
+            button.target = self
+            button.action = #selector(statusItemClicked)
+            button.sendAction(on: [.leftMouseUp])
         }
 
         rebuildMenu()
     }
 
+    @objc private func statusItemClicked() {
+        if testModeActive {
+            deactivateTestMode()
+            return
+        }
+        // Show the menu programmatically
+        guard let button = statusItem.button, let menu = self.menu else { return }
+        statusItem.menu = menu
+        button.performClick(nil)
+        // Remove after showing so future clicks go through our action
+        statusItem.menu = nil
+    }
+
     private func rebuildMenu() {
-        let menu = NSMenu()
+        let newMenu = NSMenu()
         let config = Config.shared
 
         if !config.onboardingComplete {
             let setupItem = NSMenuItem(title: "⚠️ Complete Setup...", action: #selector(openSetup), keyEquivalent: "")
             setupItem.target = self
-            menu.addItem(setupItem)
-            menu.addItem(.separator())
+            newMenu.addItem(setupItem)
+            newMenu.addItem(.separator())
         }
 
         let toggleTitle = config.enabled ? "✅ Monitoring Active" : "⏸ Monitoring Paused"
         let toggle = NSMenuItem(title: toggleTitle, action: #selector(toggleMonitoring), keyEquivalent: "")
         toggle.target = self
-        menu.addItem(toggle)
+        newMenu.addItem(toggle)
 
-        menu.addItem(.separator())
+        newMenu.addItem(.separator())
 
         let intervalItem = NSMenuItem(title: "Interval: \(config.intervalMinutes) min", action: nil, keyEquivalent: "")
         let intervalMenu = NSMenu()
@@ -79,27 +103,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             intervalMenu.addItem(item)
         }
         intervalItem.submenu = intervalMenu
-        menu.addItem(intervalItem)
+        newMenu.addItem(intervalItem)
 
         let contactDisplay = config.contact.isEmpty ? "Not set ⚠️" : config.contact
         let contactItem = NSMenuItem(title: "Contact: \(contactDisplay)", action: #selector(promptSetContact), keyEquivalent: "")
         contactItem.target = self
-        menu.addItem(contactItem)
+        newMenu.addItem(contactItem)
+
+        newMenu.addItem(.separator())
+
+        // Test Mode
+        let testItem = NSMenuItem(title: "🔍 Test Mode", action: #selector(activateTestMode), keyEquivalent: "t")
+        testItem.target = self
+        newMenu.addItem(testItem)
+
+        // Review Screenshots
+        let reviewItem = NSMenuItem(title: "📂 Review Screenshots in Finder", action: #selector(openScreenshots), keyEquivalent: "")
+        reviewItem.target = self
+        newMenu.addItem(reviewItem)
 
         if config.detections > 0 {
-            menu.addItem(.separator())
+            newMenu.addItem(.separator())
             let detItem = NSMenuItem(title: "⚠️ Detections: \(config.detections)", action: nil, keyEquivalent: "")
             detItem.isEnabled = false
-            menu.addItem(detItem)
+            newMenu.addItem(detItem)
         }
 
-        menu.addItem(.separator())
+        newMenu.addItem(.separator())
 
         let quitItem = NSMenuItem(title: "Quit ScreenGuard", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
-        menu.addItem(quitItem)
+        newMenu.addItem(quitItem)
 
-        statusItem.menu = menu
+        self.menu = newMenu
     }
 
     // MARK: - Menu Actions
@@ -146,6 +182,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    @objc private func activateTestMode() {
+        testModeActive = true
+        // Show initial "..." while first capture runs
+        if let button = statusItem.button {
+            button.image = nil
+            button.title = "..."
+        }
+        // Run a capture immediately, then every second
+        runTestCapture()
+        testTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.runTestCapture()
+        }
+        sgLog.info("Test mode activated")
+    }
+
+    private func deactivateTestMode() {
+        testModeActive = false
+        testTimer?.invalidate()
+        testTimer = nil
+        // Restore normal icon
+        if let button = statusItem.button {
+            button.title = ""
+            button.image = NSImage(
+                systemSymbolName: "eye",
+                accessibilityDescription: "ScreenGuard"
+            )
+        }
+        sgLog.info("Test mode deactivated")
+    }
+
+    private func runTestCapture() {
+        Task { @MainActor in
+            let score: Float = await Task.detached {
+                guard let cgImage = CGDisplayCreateImage(CGMainDisplayID()) else { return Float(0) }
+                guard ContentAnalyzer.shared.isModelLoaded else { return Float(0) }
+                _ = ContentAnalyzer.shared.analyze(cgImage: cgImage)
+                return ContentAnalyzer.shared.lastNSFWScore
+            }.value
+
+            guard testModeActive else { return }
+            if let button = statusItem.button {
+                button.title = String(format: "%.0f%%", score * 100)
+            }
+        }
+    }
+
+    @objc private func openScreenshots() {
+        NSWorkspace.shared.open(screenshotDir)
+    }
+
     @objc private func quit() {
         MessageService.shared.sendTamperAlert(to: Config.shared.contact, action: "APP CLOSED")
         // Give iMessage time to send
@@ -177,34 +263,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case analyzed(Bool)
         case captureFailed
         case modelMissing
-        case noDisplay
     }
 
     private func captureAndAnalyze() async {
-        // Screen capture + ML analysis — run off the main actor so
-        // ScreenCaptureKit's window-server IPC does not disrupt focus
-        // on the main thread (causes text-field deselection system-wide).
+        // Use CGDisplayCreateImage — unlike ScreenCaptureKit it reads the
+        // framebuffer directly without window-server IPC, so it never
+        // steals focus from the foreground app.
+        let screenshotDir = self.screenshotDir
         let result: CaptureResult = await Task.detached { () -> CaptureResult in
-            let cgImage: CGImage
-            do {
-                let content = try await SCShareableContent.excludingDesktopWindows(
-                    false, onScreenWindowsOnly: true)
-                guard let display = content.displays.first else {
-                    sgLog.error("No display found")
-                    return .noDisplay
-                }
-
-                let filter = SCContentFilter(display: display, excludingWindows: [])
-                let config = SCStreamConfiguration()
-                config.width = display.width
-                config.height = display.height
-
-                cgImage = try await SCScreenshotManager.captureImage(
-                    contentFilter: filter, configuration: config)
-            } catch {
-                sgLog.error("Screen capture failed: \(error.localizedDescription, privacy: .public)")
+            guard let cgImage = CGDisplayCreateImage(CGMainDisplayID()) else {
+                sgLog.error("Screen capture failed: CGDisplayCreateImage returned nil")
                 return .captureFailed
             }
+
+            // Save screenshot for review (keep last 5 minutes)
+            Self.saveScreenshot(cgImage, to: screenshotDir)
+            Self.pruneScreenshots(in: screenshotDir, olderThan: 300)
 
             // CoreML NSFW detection
             guard ContentAnalyzer.shared.isModelLoaded else {
@@ -231,8 +305,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     to: Config.shared.contact,
                     action: "NSFW MODEL MISSING — detection disabled")
             }
-            return
-        case .noDisplay:
             return
         case .analyzed(let isNSFW):
             Config.shared.lastCheck = Date()
@@ -267,6 +339,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
             button.image = original
+        }
+    }
+
+    private static func saveScreenshot(_ image: CGImage, to dir: URL) {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH-mm-ss"
+        let name = formatter.string(from: Date()) + ".jpg"
+        let url = dir.appendingPathComponent(name)
+        guard let dest = CGImageDestinationCreateWithURL(url as CFURL, "public.jpeg" as CFString, 1, nil) else { return }
+        CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: 0.5] as CFDictionary)
+        CGImageDestinationFinalize(dest)
+    }
+
+    private static func pruneScreenshots(in dir: URL, olderThan seconds: TimeInterval) {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.creationDateKey]) else { return }
+        let cutoff = Date().addingTimeInterval(-seconds)
+        for file in files {
+            guard let attrs = try? file.resourceValues(forKeys: [.creationDateKey]),
+                  let created = attrs.creationDate,
+                  created < cutoff else { continue }
+            try? fm.removeItem(at: file)
         }
     }
 
