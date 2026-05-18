@@ -7,7 +7,9 @@ final class ContentAnalyzer {
     static let shared = ContentAnalyzer()
 
     private var visionModel: VNCoreMLModel?
-    private let threshold: Float = 0.45
+    private let threshold: Float = 0.75
+    private let requiredConsecutive = 2
+    private var consecutiveCount = 0
 
     var isModelLoaded: Bool { visionModel != nil }
     private(set) var lastNSFWScore: Float = 0
@@ -81,7 +83,12 @@ final class ContentAnalyzer {
 
             if let nsfwResult = results.first(where: { $0.identifier == "NSFW" }) {
                 self.lastNSFWScore = nsfwResult.confidence
-                isNSFW = nsfwResult.confidence > self.threshold
+                if nsfwResult.confidence > self.threshold {
+                    self.consecutiveCount += 1
+                    isNSFW = self.consecutiveCount >= self.requiredConsecutive
+                } else {
+                    self.consecutiveCount = 0
+                }
             }
         }
 
