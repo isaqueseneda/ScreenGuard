@@ -7,7 +7,7 @@ final class ContentAnalyzer {
     static let shared = ContentAnalyzer()
 
     private var visionModel: VNCoreMLModel?
-    private let threshold: Float = 0.10
+    private let threshold: Float = 0.45
 
     var isModelLoaded: Bool { visionModel != nil }
     private(set) var lastNSFWScore: Float = 0
