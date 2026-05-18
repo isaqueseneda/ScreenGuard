@@ -58,7 +58,59 @@ final class ContentAnalyzer {
         return nil
     }
 
+    /// Fast pre-filter: downsamples to 16x16 and checks color saturation.
+    /// Text-heavy screens (terminals, IDEs, docs) are almost entirely desaturated
+    /// and consistently cause false positives in the NSFW model.
+    private func isLikelyTextScreen(_ cgImage: CGImage) -> Bool {
+        let sampleSize = 16
+        guard let context = CGContext(
+            data: nil,
+            width: sampleSize,
+            height: sampleSize,
+            bitsPerComponent: 8,
+            bytesPerRow: sampleSize * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return false }
+
+        context.interpolationQuality = .medium
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: sampleSize, height: sampleSize))
+
+        guard let data = context.data else { return false }
+        let pixels = data.assumingMemoryBound(to: UInt8.self)
+
+        var lowSatCount = 0
+        let totalPixels = sampleSize * sampleSize
+
+        for i in 0..<totalPixels {
+            let offset = i * 4
+            let r = Float(pixels[offset]) / 255.0
+            let g = Float(pixels[offset + 1]) / 255.0
+            let b = Float(pixels[offset + 2]) / 255.0
+
+            let maxC = max(r, g, b)
+            let minC = min(r, g, b)
+            let saturation = maxC > 0 ? (maxC - minC) / maxC : 0
+
+            if saturation < 0.15 {
+                lowSatCount += 1
+            }
+        }
+
+        let lowSatRatio = Float(lowSatCount) / Float(totalPixels)
+        let isText = lowSatRatio > 0.85
+        sgLog.notice("Saturation pre-filter: \(String(format: "%.0f%%", lowSatRatio * 100), privacy: .public) low-sat → \(isText ? "skip (text screen)" : "analyze", privacy: .public)")
+        return isText
+    }
+
     func analyze(cgImage: CGImage) -> Bool {
+        // Skip NSFW model entirely for text-heavy screens (terminals, IDEs, docs)
+        if isLikelyTextScreen(cgImage) {
+            lastNSFWScore = 0
+            consecutiveCount = 0
+            return false
+        }
+
         guard let model = visionModel else {
             sgLog.error("NSFW model not available")
             return false
@@ -92,7 +144,10 @@ final class ContentAnalyzer {
             }
         }
 
-        request.imageCropAndScaleOption = .scaleFill
+        // centerCrop preserves aspect ratio — scaleFill distorted widescreen
+        // screenshots into 224x224 squares, creating artifacts that the model
+        // misinterpreted as NSFW content
+        request.imageCropAndScaleOption = .centerCrop
 
         let handler = VNImageRequestHandler(cgImage: cgImage)
         do {
